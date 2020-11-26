@@ -4,7 +4,7 @@
 #
 # Copyright Notice:
 #
-# Copyright 2018 Lenovo Corporation
+# Copyright 2020 Lenovo Corporation
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
 # not use this file except in compliance with the License. You may obtain
@@ -65,6 +65,61 @@ def lenovo_get_bios_boot_order(ip, login_account, login_password, system_id):
                 error_message = utils.get_extended_error(response_system_url)
                 result = {'ret': False, 'msg': "Url '%s' response Error code %s \nerror_message: %s" % (system_url, response_system_url.status, error_message)}
                 return result
+
+            # Get boot order info via standard api for ThinkSystem servers if standard api exists
+            if 'Boot' in response_system_url.dict and 'BootOrder' in response_system_url.dict['Boot'] and 'BootOptions' in response_system_url.dict['Boot']:
+                # Get boot order id list
+                boot_order_idlist = response_system_url.dict['Boot']['BootOrder']
+                # Get boot order id's display name and support name list from BootOptions
+                boot_order_idmap = {}
+                boot_order_supported = list()
+                boot_options_url = response_system_url.dict['Boot']['BootOptions']['@odata.id']
+                response_boot_options = REDFISH_OBJ.get(boot_options_url, None)
+                if response_boot_options.status != 200:
+                    error_message = utils.get_extended_error(response_boot_options)
+                    result = {'ret': False, 'msg': "Url '%s' response Error code %s \nerror_message: %s" % (
+                        boot_options_url, response_boot_options.status, error_message)}
+                    return result
+                for boot_member in response_boot_options.dict['Members']:
+                    boot_member_url = boot_member['@odata.id']
+                    response_boot_member = REDFISH_OBJ.get(boot_member_url, None)
+                    if response_boot_member.status != 200:
+                        error_message = utils.get_extended_error(response_boot_member)
+                        result = {'ret': False, 'msg': "Url '%s' response Error code %s \nerror_message: %s" % (
+                            boot_member_url, response_boot_member.status, error_message)}
+                        return result
+                    boot_order_idmap[response_boot_member.dict['BootOptionReference']] = response_boot_member.dict['DisplayName']
+                    boot_order_supported.append(response_boot_member.dict['DisplayName'])
+
+                # Get boot order next id list
+                boot_next_idlist = []
+                if '@Redfish.Settings' in response_system_url.dict and 'SettingsObject' in response_system_url.dict['@Redfish.Settings']:
+                    boot_next_url = response_system_url.dict['@Redfish.Settings']['SettingsObject']['@odata.id']
+                else:
+                    boot_next_url = system_url + '/Pending'
+                response_boot_next = REDFISH_OBJ.get(boot_next_url, None)
+                if response_boot_next.status == 200:
+                    if 'Boot' in response_boot_next.dict and 'BootOrder' in response_boot_next.dict['Boot']:
+                        boot_next_idlist = response_boot_next.dict['Boot']['BootOrder']
+                else:
+                    boot_next_idlist = boot_order_idlist
+
+                # Set result
+                if len(boot_order_supported) >= len(boot_order_idlist):
+                    boot_order_current = list()
+                    for item in boot_order_idlist:
+                        boot_order_current.append(boot_order_idmap[item])
+                    boot_order_next = list()
+                    for item in boot_next_idlist:
+                        boot_order_next.append(boot_order_idmap[item])
+                    boot_order_info = {}
+                    boot_order_info['BootOrderNext'] = boot_order_next
+                    boot_order_info['BootOrderSupported'] = boot_order_supported
+                    boot_order_info['BootOrderCurrent'] = boot_order_current
+                    boot_info_list.append(boot_order_info)
+                    result['ret'] = True
+                    result['entries'] = boot_info_list
+                    return result
 
             # Get boot order info via Oem/Lenovo/BootSettings resource for ThinkSystem servers except SR635/SR655
             if 'Lenovo' in str(response_system_url.dict) and 'BootSettings' in str(response_system_url.dict):
@@ -131,7 +186,7 @@ def lenovo_get_bios_boot_order(ip, login_account, login_password, system_id):
                 if 'Attributes' in response_bios_settings.dict and attribute_name in response_bios_settings.dict['Attributes']:
                     attribute_value_next = response_bios_settings.dict['Attributes'][attribute_name]
 
-                # Parse attribute value string to get currnt/supported/next boot order settings
+                # Parse attribute value string to get current/supported/next boot order settings
                 boot_order_current = list()
                 boot_order_supported = list()
                 for boot_order_item in attribute_value.split(';'):

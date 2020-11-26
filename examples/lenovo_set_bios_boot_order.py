@@ -4,7 +4,7 @@
 #
 # Copyright Notice:
 #
-# Copyright 2018 Lenovo Corporation
+# Copyright 2020 Lenovo Corporation
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
 # not use this file except in compliance with the License. You may obtain
@@ -68,6 +68,55 @@ def lenovo_set_bios_boot_order(ip, login_account, login_password, system_id, boo
                 result = {'ret': False, 'msg': "Url '%s' response Error code %s \nerror_message: %s" % (system_url, response_system_url.status, error_message)}
                 return result
 
+            # Set boot order info via standard api for ThinkSystem servers if standard api exists
+            if 'Boot' in response_system_url.dict and 'BootOrder' in response_system_url.dict['Boot'] and 'BootOptions' in response_system_url.dict['Boot']:
+                # Get the boot order settings url
+                if '@Redfish.Settings' in response_system_url.dict and 'SettingsObject' in response_system_url.dict['@Redfish.Settings']:
+                    boot_settings_url = response_system_url.dict['@Redfish.Settings']['SettingsObject']['@odata.id']
+                else:
+                    boot_settings_url = system_url + '/Pending'
+
+                # Get the boot order supported list
+                boot_order_supported = list()
+                boot_order_mapid = {}
+                boot_options_url = response_system_url.dict['Boot']['BootOptions']['@odata.id']
+                response_boot_options = REDFISH_OBJ.get(boot_options_url, None)
+                if response_boot_options.status != 200:
+                    error_message = utils.get_extended_error(response_boot_options)
+                    result = {'ret': False, 'msg': "Url '%s' response Error code %s \nerror_message: %s" % (
+                        boot_options_url, response_boot_options.status, error_message)}
+                    return result
+                for boot_member in response_boot_options.dict['Members']:
+                    boot_member_url = boot_member['@odata.id']
+                    response_boot_member = REDFISH_OBJ.get(boot_member_url, None)
+                    if response_boot_member.status != 200:
+                        error_message = utils.get_extended_error(response_boot_member)
+                        result = {'ret': False, 'msg': "Url '%s' response Error code %s \nerror_message: %s" % (
+                            boot_member_url, response_boot_member.status, error_message)}
+                        return result
+                    boot_order_mapid[response_boot_member.dict['DisplayName']] = response_boot_member.dict['BootOptionReference']
+                    boot_order_supported.append(response_boot_member.dict['DisplayName'])
+
+                # Check input bootorder validity
+                bootorder_convert_idlist = list()
+                for boot in bootorder:
+                    if boot not in boot_order_supported:
+                        result = {'ret': False, 'msg': "Invalid bootorder %s. You can specify one or more boot order from list:%s" %(boot, boot_order_supported)}
+                        return result
+                    bootorder_convert_idlist.append(boot_order_mapid[boot])
+
+                # Set the boot order next via patch request
+                body = {'Boot': {'BootOrder': bootorder_convert_idlist}}
+                response_boot_order = REDFISH_OBJ.patch(boot_settings_url, body=body)
+                if response_boot_order.status in [200, 204]:
+                    result = {'ret': True, 'msg': "Modify Boot Order successfully. New boot order will take effect on the next startup."}
+                    return result
+                else:
+                    error_message = utils.get_extended_error(response_boot_order)
+                    result = {'ret': False, 'msg': "Url '%s' response Error code %s \nerror_message: %s" % (
+                        boot_settings_url, response_boot_order.status, error_message)}
+                    return result
+
             # Set boot order via Oem/Lenovo/BootSettings resource for ThinkSystem servers except SR635/SR655
             if 'Lenovo' in str(response_system_url.dict) and 'BootSettings' in str(response_system_url.dict):
                 # Get the BootSettings url
@@ -88,7 +137,7 @@ def lenovo_set_bios_boot_order(ip, login_account, login_password, system_id, boo
                     boot_order_supported = response_get_boot_order.dict['BootOrderSupported']
                     for boot in bootorder:
                         if boot not in boot_order_supported:
-                            result = {'ret': False, 'msg': "Invalid bootorder %s. You can specify one or more boot order form list:%s" %(boot, boot_order_supported)}
+                            result = {'ret': False, 'msg': "Invalid bootorder %s. You can specify one or more boot order from list:%s" %(boot, boot_order_supported)}
                             return result
 
                 # Set the boot order next via patch request
@@ -140,7 +189,7 @@ def lenovo_set_bios_boot_order(ip, login_account, login_password, system_id, boo
                 for boot in bootorder:
                     # If input bootorder is not supported, prompt error message
                     if boot not in boot_order_supported:
-                        result = {'ret': False, 'msg': "Invalid bootorder %s. You can specify one or more boot order form list:%s" %(boot, boot_order_supported)}
+                        result = {'ret': False, 'msg': "Invalid bootorder %s. You can specify one or more boot order from list:%s" %(boot, boot_order_supported)}
                         return result
                     # Add enabled bootorder list
                     for boot_order_struct in org_boot_order_struct_list:
@@ -189,7 +238,7 @@ def lenovo_set_bios_boot_order(ip, login_account, login_password, system_id, boo
 
 
 def add_helpmessage(argget):
-    argget.add_argument('--bootorder', nargs='*', type=str, required=True, help='Input the bios boot order list,  The boot order takes effect on the next startup. Support:"CD/DVD Rom","Hard Disk", etc.')
+    argget.add_argument('--bootorder', nargs='*', type=str, required=True, help='Input the bios boot order list,  The boot order takes effect on the next startup. Support:"CD/DVD Rom","Hard Disk", etc. Detailed bootorder support list can be gotten by lenovo_get_bios_boot_order.py script')
 
 
 def add_parameter():
